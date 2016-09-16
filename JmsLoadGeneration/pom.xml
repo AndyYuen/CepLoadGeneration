@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+	    <groupId>com.redhat.cep</groupId>
+	    <version>1.0.0</version>
+	    <artifactId>Simulator</artifactId>
+    </parent>
+
+  <groupId>com.redhat.cep</groupId>
+  <artifactId>JmsLoadGeneration</artifactId>
+    <packaging>jar</packaging>
+    <version>1.0-SNAPSHOT</version>
+    <name>Load Generation :: Camel :: Spring :: JMS</name>
+
+    <properties>
+        <camel.osgi.export.pkg>com.redhat.cep.server.*</camel.osgi.export.pkg>
+        <camel.osgi.import.additional>org.apache.activemq.xbean,org.apache.activemq.broker,org.apache.activemq.pool</camel.osgi.import.additional>
+    </properties>
+
+
+    <dependencies>
+    <dependency>
+  		<groupId>joda-time</groupId>
+  		<artifactId>joda-time</artifactId>
+	</dependency>
+	<dependency>
+		<groupId>org.ostermiller</groupId>
+		<artifactId>utils</artifactId>
+	</dependency>
+	<dependency>
+		<groupId>org.apache.commons</groupId>
+		<artifactId>commons-math3</artifactId>
+	</dependency>
+
+        <dependency>
+     		 <groupId>com.redhat.cep</groupId>
+      		<artifactId>Util</artifactId>
+      		<version>1.0-SNAPSHOT</version>
+    	</dependency>
+    	<dependency>
+     		 <groupId>com.redhat.cep</groupId>
+      		<artifactId>stockprice</artifactId>
+      		<version>1.0-SNAPSHOT</version>
+    	</dependency>
+
+        <!-- required by both client and server -->
+        <dependency>
+            <groupId>org.apache.camel</groupId>
+            <artifactId>camel-core</artifactId>
+            <version>2.15.1.redhat-620133</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.camel</groupId>
+            <artifactId>camel-jms</artifactId>
+            <version>2.15.1.redhat-620133</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.camel</groupId>
+            <artifactId>camel-spring</artifactId>
+            <version>2.15.1.redhat-620133</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.activemq</groupId>
+            <artifactId>activemq-camel</artifactId>
+            <version>5.11.0.redhat-620133</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.activemq</groupId>
+            <artifactId>activemq-pool</artifactId>
+            <version>5.11.0.redhat-620133</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.xbean</groupId>
+            <artifactId>xbean-spring</artifactId>
+            <version>3.18</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-log4j12</artifactId>
+            <version>1.7.10</version>
+        </dependency>
+        <dependency>
+            <groupId>log4j</groupId>
+            <artifactId>log4j</artifactId>
+            <version>1.2.16-redhat-2</version>
+        </dependency>
+        
+        <!-- for testing -->
+        <dependency>
+          <groupId>org.apache.camel</groupId>
+          <artifactId>camel-test-spring</artifactId>
+          <version>2.15.1.redhat-620133</version>
+          <scope>test</scope>
+        </dependency>
+
+    </dependencies>
+  
+    <profiles>
+        <profile>
+            <id>CamelServer</id>
+            <properties>
+                <target.main.class>org.apache.camel.spring.Main</target.main.class>
+                <target.cmd.args>-ac META-INF/spring/camel-server.xml</target.cmd.args>
+                
+            </properties>
+        </profile>
+        <profile>
+            <id>JmsLoadGenerator</id>
+            <properties>
+                <target.main.class>com.redhat.cep.JmsLoadGenerator</target.main.class>
+                <target.cmd.args>com.redhat.cep.stockprice.model src/main/simulations/event_sim_1.csv</target.cmd.args>  
+            </properties>
+        </profile>
+        <profile>
+            <id>JmsLoadGenerator2</id>
+            <properties>
+                <target.main.class>com.redhat.cep.JmsLoadGenerator</target.main.class>
+                <target.cmd.args>com.redhat.cep.stockprice.model src/main/simulations/event_sim_2.csv</target.cmd.args>  
+            </properties>
+        </profile>
+    </profiles>
+
+    <build>
+
+		<plugins>
+			<plugin>
+				<groupId>org.codehaus.mojo</groupId>
+				<artifactId>build-helper-maven-plugin</artifactId>
+				<version>1.9.1</version>
+				<executions>
+					<execution>
+						<id>attach-artifacts</id>
+						<phase>package</phase>
+						<goals>
+							<goal>attach-artifact</goal>
+						</goals>
+						<configuration>
+							<artifacts>
+								<artifact>
+									<file>target/classes/features.xml</file>
+									<type>xml</type>
+									<classifier>features</classifier>
+								</artifact>
+							</artifacts>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+
+      <!-- Allows apps to be run via 'mvn compile exec:java' -->
+      <plugin>
+          <groupId>org.codehaus.mojo</groupId>
+          <artifactId>exec-maven-plugin</artifactId>
+          <version>1.3.2</version>
+          <configuration>
+              <mainClass>${target.main.class}</mainClass>
+              <includePluginDependencies>false</includePluginDependencies>
+              <commandlineArgs>${target.cmd.args}</commandlineArgs>
+          </configuration>
+      </plugin>
+    </plugins>
+
+  </build>
+
+</project>

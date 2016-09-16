@@ -1,0 +1,303 @@
+//created on: Feb 22, 2014
+package com.redhat.cep.optometrist
+
+//list any import classes here.
+import com.redhat.cep.optometrist.model.Appointment;
+import com.redhat.cep.optometrist.model.Optometrist;
+import com.redhat.cep.optometrist.model.Patient;
+import com.redhat.cep.util.Clock;
+import com.redhat.cep.optometrist.model.PatientArrivalEvent;
+import com.redhat.cep.optometrist.model.PatientServiceStartedEvent;
+import com.redhat.cep.optometrist.model.PatientServiceCompletedEvent;
+import com.redhat.cep.optometrist.model.PatientMakesAppointmentEvent;
+import com.redhat.cep.optometrist.model.PatientCancelsAppointmentEvent;
+import com.redhat.cep.optometrist.model.SendSmsEvent;
+import com.redhat.cep.optometrist.model.CheckDelayEvent
+import com.redhat.cep.optometrist.model.SwapAppointmentsEvent
+import com.redhat.cep.optometrist.model.ValidSmsPeriodEvent;
+import com.redhat.cep.util.PushOverNofification;
+import org.joda.time.LocalTime;
+import org.joda.time.Minutes;
+import java.util.ArrayList;
+
+//declare any global variables here
+global PushOverNofification notify;
+global Clock clock;
+
+// external events
+declare PatientArrivalEvent
+	@role( event )
+end
+
+declare PatientServiceStartedEvent
+	@role( event )
+end
+
+declare PatientServiceCompletedEvent
+	@role( event )
+end
+
+declare PatientCancelsAppointmentEvent
+	@role( event )
+end
+
+declare PatientMakesAppointmentEvent
+	@role( event )
+end
+
+// internal events
+declare SendSmsEvent
+	@role( event )
+end
+
+
+declare CheckDelayEvent
+	@role( event )
+	@expires( 1m )
+end
+
+declare ValidSmsPeriodEvent
+	@role( event )
+end
+
+//Queries
+declare SwapAppointmentsEvent
+	@role( event )
+end
+
+query "Optometrists"
+	$optometrist : Optometrist()
+end
+
+query "Appointments" (String name)
+	$appointment : Appointment(optometristName == name)
+end
+
+query "SmsEventCount" (String name)
+	$count : Number() 
+		from accumulate($event : SendSmsEvent(optometristName == name) over window:time (10h) 
+		from entry-point Clinic,
+		count($event))
+end
+
+query "SmsEvents" (String name)
+	$list : ArrayList() 
+		from collect($event : SendSmsEvent(optometristName == name) over window:time (10h) 
+		from entry-point Clinic)
+end
+
+rule "Patient Arrival"
+
+    when
+        $event : PatientArrivalEvent($name : patientName, $op : optometristName) 
+        	from entry-point Clinic;
+        $appointment : Appointment(patientName == $name, $op == optometristName)
+
+    then
+    	// set arrival time
+        $appointment.setArrivalTime(new LocalTime(clock.getTime()));
+        retract($event)
+		System.out.println(clock.getTime() + ": Patient " + $name + " arrived at " + clock.getTime());
+end
+
+rule "Start Servicing Patient - Behinds Schedule"
+
+    when
+
+        $event : PatientServiceStartedEvent($name : patientName, $opName : optometristName, $slotNumber : slotNumber) 
+        	from entry-point Clinic;
+
+        $appointment : Appointment(patientName == $name, $opName == optometristName)
+		$op : Optometrist(name == $opName)
+    then
+    	// set service start time
+        $appointment.setStartServiceTime(new LocalTime(clock.getTime()));
+                        
+        // set delay (negative ie, ahead of schedule)
+        modify($op) { setSlotNumberInService($slotNumber) };
+        
+        // generate BehindSceduleEvent
+        entryPoints['Clinic'].insert(new CheckDelayEvent($opName, clock.getTime()));
+        retract($event)
+		System.out.println(clock.getTime() + ": Patient " + $name + " being service, Scheduled start time: " + $appointment.getScheduledStartTime());
+end
+
+
+rule "Check Schedule - delayed: send SMS if not sent one in 15 minutes"
+
+	when
+		$event : CheckDelayEvent($opName : optometristName, $time : currentTime) 
+        	from entry-point Clinic;
+        $op : Optometrist(name == $opName, $slot : slotNumberInService >= 0,
+        	(compareSlotTimeTo($slot, $time) < 0))
+        not (SendSmsEvent(optometristName == $opName) over window:time (15m) from entry-point Clinic)
+
+	then
+		// generate SendSmsEvent
+        entryPoints['Clinic'].insert(new SendSmsEvent($opName, $slot, 
+        	$op.minutesAfterScheduledStartTime($slot, $time), 
+        	$time));
+        entryPoints['Clinic'].insert(new ValidSmsPeriodEvent($time));
+        retract($event)
+        //System.out.println(clock.getTime() + ": Sending sms to patients of Optometrist: " + $opName + 
+        //	": experiencing " + $op.minutesAfterScheduledStartTime($slot, $time) +
+        //	" minutes delay");
+end
+
+rule "Check Schedule - optometrist idle: send SMS if not sent one in 15 minutes"
+
+	when
+		$event : CheckDelayEvent($opName : optometristName, $time : currentTime) 
+        	from entry-point Clinic;
+        $op : Optometrist(name == $opName, slotNumberInService < 0, $start : startTime,
+        	$slot : lastSlotNumberInService)
+        not (Appointment($opName == optometristName, slotNumber > $slot, (scheduledStartTime.compareTo($time) < 0)))
+        $sms : SendSmsEvent(optometristName == $opName) over window:length (1) from entry-point Clinic
+		SendSmsEvent(optometristName == $opName, delay > 0, this == $sms) over window:length (1) from entry-point Clinic
+	then
+		// generate SendSmsEvent
+        entryPoints['Clinic'].insert(new SendSmsEvent($opName, $slot, 
+        	0, 
+        	$time));
+        entryPoints['Clinic'].insert(new ValidSmsPeriodEvent($time));
+        retract($event)
+        //System.out.println($time + ": last sms with delay=" + $sms.getDelay() + " at " + $sms.getCurrentTime());
+        //System.out.println($time + ": Sending sms to patients of Optometrist: " + $opName + 
+        //	": service back on schedule");
+end
+
+rule "Do notification - delay"
+salience 10
+	when
+		ValidSmsPeriodEvent($time : currentTime) from entry-point Clinic;
+		$event : SendSmsEvent($name : optometristName, $slot : slotNumberInService, $delay : delay > 0, 
+			(currentTime.compareTo($time) == 0))
+			from entry-point Clinic;
+		Appointment(optometristName == $name, $patientName : patientName, $scheduledStartTime : scheduledStartTime, slotNumber > $slot)
+		Patient($patientName == name, $pushoverKey : pushoverKey)
+		Optometrist(name == $name, $clinic : clinic)
+	then
+		System.out.println($time + "\t" + $patientName + "'s appointment delayed by " + $delay + " minutes, notification sent to: " + $pushoverKey);
+		notify.sendNotification($pushoverKey,
+			$time,
+			$clinic,
+			String.format("%s, there has been a delay, the estimated time for your appointment is now %s", 
+				$patientName, $scheduledStartTime.plusMinutes($delay).toString("HH:mm"))
+			);
+end
+
+rule "Do notification - back to normal"
+salience 10
+	when
+
+		ValidSmsPeriodEvent($time : currentTime) from entry-point Clinic;
+		$event : SendSmsEvent($name : optometristName, $slot : slotNumberInService, $delay : delay <= 0, 
+			(currentTime.compareTo($time) == 0))
+			from entry-point Clinic;
+		Appointment(optometristName == $name, $patientName : patientName, $scheduledStartTime : scheduledStartTime, slotNumber > $slot)
+		Patient($patientName == name, $pushoverKey : pushoverKey)
+		Optometrist(name == $name, $clinic : clinic)
+	then
+		System.out.println($time + "\t" + $patientName + "'s appointment back to normal, notification sent to: " + $pushoverKey);
+		notify.sendNotification($pushoverKey,
+			$time,
+			$clinic,
+			String.format("%s, we are back on schedule, your appointment is back to %s", 
+				$patientName, $scheduledStartTime.plusMinutes($delay).toString("HH:mm"))
+			);
+end
+
+rule "Remove ValidSmSPeriodEvent to stop sending SMS"
+
+	when
+
+		$event : ValidSmsPeriodEvent($time : currentTime) from entry-point Clinic;
+		SendSmsEvent((currentTime.compareTo($time) == 0))
+			from entry-point Clinic;
+	then
+		// SendSmsEvent retained for final analysis using the ""SmsEventCount" and
+		// "SmsEvents" queries at the end of the simulation
+		retract($event);
+end
+
+rule "End Servicing Patient"
+
+    when
+
+        $event : PatientServiceCompletedEvent($name : patientName, $opName : optometristName) 
+        	from entry-point Clinic;
+        $appointment : Appointment(patientName == $name, $opName == optometristName)
+        $op : Optometrist(name == $opName, $inService : slotNumberInService)
+
+    then
+        $appointment.setEndServiceTime(new LocalTime(clock.getTime()));
+        modify ($op) { setLastSlotNumberInService($inService), setSlotNumberInService(-1) };
+        entryPoints['Clinic'].insert(new CheckDelayEvent($opName, clock.getTime()));
+        retract($event)
+		System.out.println(clock.getTime() + ": Patient " + $name + " service completed, Scheduled start time: " + $appointment.getScheduledStartTime());
+end
+
+rule "Cancel appointment"
+
+    when
+
+        $event : PatientCancelsAppointmentEvent($name : patientName, $op : optometristName) 
+        	from entry-point Clinic;
+        $appointment : Appointment(patientName == $name, $op == optometristName)
+
+    then
+        retract($appointment)
+        retract($event)
+		System.out.println(clock.getTime() + ": Patient " + $name + " cancelled appointment at " + $appointment.getScheduledStartTime());
+
+end
+
+rule "Make Appointment - existing Patient"
+
+    when
+
+        $event : PatientMakesAppointmentEvent($name : patientName, $opName : optometristName, 
+        	$slotNumber : slotNumber, $mobileNumber: mobileNumber) from entry-point Clinic;
+        $patient : Patient($name == name)
+        $op : Optometrist(name == $opName)
+        not (Appointment(slotNumber == $slotNumber))
+
+    then
+        insert(new Appointment($name, $opName, $slotNumber, $op.getStartTimeForSlot($slotNumber)));
+        modify($patient) { setMobileNumber($mobileNumber) };
+        retract($event)
+		System.out.println(clock.getTime() + ": Patient " + $name + " makes appointment at " + $op.getStartTimeForSlot($slotNumber));
+end
+
+rule "Make Appointment - new Patient"
+
+    when
+
+        $event : PatientMakesAppointmentEvent($name : patientName, $opName : optometristName, 
+        	$slotNumber : slotNumber, $mobileNumber: mobileNumber, $pushoverKey : pushoverKey) from entry-point Clinic;
+        not (Patient($name == name))
+        $appointment : Appointment(patientName == $name, $opName == optometristName)
+        $op : Optometrist(name == $opName)
+
+    then
+        insert(new Appointment($name, $opName, $slotNumber, $op.getStartTimeForSlot($slotNumber)));
+        insert(new Patient($name, $mobileNumber, $pushoverKey));
+        retract($event)
+		System.out.println(clock.getTime() + ": Patient " + $name + " makes appointment at " + $op.getStartTimeForSlot($slotNumber));
+end
+
+rule "swap appointments"
+	when
+		$event : SwapAppointmentsEvent($name : patientName, $opName : optometristName, 
+        	$slotNumber : slotNumber, $otherName : otherPatientName, 
+        	$otherSlotNumber : otherSlotNumber) from entry-point Clinic;
+        $app1 : Appointment(patientName == $name, $opName == optometristName, slotNumber == $slotNumber)
+        $app2 : Appointment(patientName == $otherName, $opName == optometristName, slotNumber == $otherSlotNumber)
+        $op : Optometrist(name == $opName)
+
+	then
+		modify ($app1) { setSlotNumber($otherSlotNumber), setScheduledStartTime($op.getStartTimeForSlot($otherSlotNumber)) };
+		modify ($app2) { setSlotNumber($slotNumber), setScheduledStartTime($op.getStartTimeForSlot($slotNumber)) };
+		retract($event)
+		System.out.println(clock.getTime() + ": Swapped appointments between " + $name + " and " + $otherName);
+end

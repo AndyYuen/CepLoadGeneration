@@ -1,0 +1,6 @@
+time,type,className,arrivalDistrRef,serviceDistrRef,var#1,var#2,var#3,var#4,var#5
+,D,com.redhat.cep.util.ExponentialDistribution,arrival,,12111,15,,,
+,D,com.redhat.cep.util.FixedDistribution,fixedTime,,10,,,,
+10:00,G,StockPriceEventGenerator,arrival,,32333,BHP, BHP BILLITON LIMITED,17,2
+10:00,G,StockPriceEventGenerator,fixedTime,,52555,CBA,COMMONWEALTH BANK OF AUSTRALIA,80.09,8
+11:00,T,,,,,,,,

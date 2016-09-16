@@ -1,0 +1,63 @@
+//created on: Dec 14, 2015
+package com.redhat.cep.stockprice
+
+//list any import classes here.
+import com.redhat.cep.stockprice.model.StockPriceEvent;
+import com.redhat.cep.stockprice.model.CalcEvent;
+import com.redhat.cep.stockprice.model.CleanupEvent;
+import com.redhat.cep.util.Clock;
+import java.util.Collection;
+import java.util.ArrayList;
+
+
+//declare any global variables here
+global Collection tickers;
+global Collection list;
+global Clock clock;
+
+// events
+declare StockPriceEvent
+	@role( event )
+end
+
+declare CalcEvent
+	@role( event )
+end
+
+
+rule "Calc avg, max and min"
+	salience 10
+    when
+    
+    	$calcEvent : CalcEvent() from entry-point stockprice;
+		$ticker : String() from tickers;
+    	accumulate(StockPriceEvent($price : price, symbol == $ticker) over window:time (30s) from entry-point stockprice,
+    		$count : count($price),
+			$min : min( $price ),
+			$max : max( $price ),
+			$avg : average( $price));
+
+
+    then
+		String msg = String.format("%s Stock %s: avg price=%8.3f, min price=%8.3f, max price=%8.3f samples=%6d",
+        			clock.getTime(), $ticker, $avg, $min, $max, $count);
+        list.add(msg);
+        System.out.println(msg);
+
+
+
+end
+
+
+
+rule "retract CalcEvent"
+
+    when
+    
+    	$calcEvent : CalcEvent() from entry-point stockprice;
+
+    then
+
+		retract($calcEvent);
+
+end
